@@ -1,0 +1,103 @@
+# vi: set fenc=utf-8 ft=yaml ts=8 sw=2 sts=2 et:
+# coding: utf-8
+
+# Copyright (c) 2017 eyeo GmbH
+#
+# This is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This software is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with the software. If not, see <http://www.gnu.org/licenses/>.
+
+# http://docs.ansible.com/ansible/latest/playbooks.html
+---
+- hosts: "all"
+
+  # http://docs.ansible.com/ansible/latest/playbooks_intro.html#tasks-list
+  tasks:
+
+    # http://docs.ansible.com/ansible/package_module.html
+    - name: "puppet package"
+      package:
+        name: "puppet"
+        state: "installed"
+      notify:
+        - "puppet agent activation"
+    - name: "puppet module packages"
+      package:
+        name: "{{ item }}"
+        state: "installed"
+      with_items:
+        - "puppet-module-puppetlabs-stdlib"
+      when: |
+        ( ansible_distribution == 'Debian' and (
+          ansible_distribution_release == 'stretch' or
+          ansible_distribution_release == 'jessie' )) or
+        ( ansible_distribution == 'Ubuntu' and (
+          ansible_distribution_release == 'xenial' ))
+
+    # http://docs.ansible.com/ansible/stat_module.html
+    - name: "stat /etc/puppet/code"
+      stat:
+        path: "/etc/puppet/code"
+      register: "codedir"
+    - name: "stat /vagrant"
+      stat:
+        path: "/vagrant"
+      register: "vagrant"
+
+    # http://docs.ansible.com/ansible/latest/set_fact_module.html
+    - name: "determine default puppet codedir"
+      set_fact:
+        puppet_codedir:
+          "{{ '/etc/puppet/code' if codedir.stat.exists else '/etc/puppet' }}"
+
+    # http://docs.ansible.com/ansible/latest/command_module.html
+    - name: "puppet module dependencies"
+      command: "puppet module install '{{ item.name }}' --version '{{ item.version_requirement }}'"
+      register: "puppet"
+      changed_when:
+        "(puppet.stdout | search('Installing ')) and puppet.rc == 0"
+      with_items:
+        "{{ (lookup('file', 'metadata.json') | from_json).get('dependencies') }}"
+
+    # http://docs.ansible.com/ansible/latest/file_module.html
+    - name: "directory $codedir/modules"
+      file:
+        path: "{{ puppet_codedir }}/modules"
+        state: "directory"
+
+    - block:
+      - name: "symlink $codedir/modules/ansible"
+        file:
+          dest: "{{ puppet_codedir }}/modules/ansible"
+          src: "/vagrant"
+          state: "link"
+      when:
+        "vagrant.stat.exists == True"
+
+    # http://docs.ansible.com/ansible/latest/meta_module.html
+    - name: "flush ansible handlers"
+      meta: "flush_handlers"
+
+    # http://docs.ansible.com/ansible/latest/puppet_module.html
+    - name: "puppet run"
+      command: "puppet apply -e \"notify {'hello world':}\""
+    
+  # http://docs.ansible.com/ansible/playbooks_intro.html#handlers
+  handlers:
+
+    # http://docs.ansible.com/ansible/latest/command_module.html
+    - name: "puppet agent activation"
+      command: "puppet agent --enable"
+
+  # http://docs.ansible.com/ansible/become.html
+  become: true
+
